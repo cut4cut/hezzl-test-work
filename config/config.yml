@@ -1,0 +1,13 @@
+app:
+  name: 'hezzl-test-work'
+  version: '1.0.0'
+
+logger:
+  log_level: 'debug'
+  rollbar_env: 'hezzl-test-work'
+
+redis:
+  expiration: 60
+
+postgres:
+  pool_max: 2

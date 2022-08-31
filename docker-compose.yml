@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.0.1
+    container_name: hezzl_zookeeper
+    hostname: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  broker:
+    image: confluentinc/cp-kafka:7.0.1
+    container_name: hezzl_kafka
+    hostname: kafka
+    ports:
+      - 9092:9092
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+
+  init-broker:
+    image: confluentinc/cp-kafka:7.0.1
+    container_name: hezzl_kafka_init
+    depends_on:
+      - broker
+    entrypoint: [ '/bin/sh', '-c' ]
+    command: |
+      "
+      echo -e 'Current list of topics:'
+      kafka-topics --bootstrap-server kafka:29092 --list
+
+      echo -e 'Creating kafka topics'
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic user --replication-factor 1 --partitions 1
+
+      echo -e 'Successfully created the following topics:'
+      kafka-topics --bootstrap-server kafka:29092 --list
+      "
+  
+  clickhouse:
+    image: yandex/clickhouse-server:20.6
+    container_name: hezzl_clickhouse
+    ports:
+      - 8123:8123
+      - 9000:9000
+    volumes:
+      - ./migration/clickhouse:/docker-entrypoint-initdb.d
+
+  postgres:
+    container_name: hezzl_postgres
+    hostname: postgres
+    image: postgres:13.3
+    volumes:
+      - ./migration/postgres:/docker-entrypoint-initdb.d
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-pass}
+      - POSTGRES_DB=${POSTGRES_DB:-postgres}
+    ports:
+      - 5432:5432
+
+  redis:
+    container_name: hezzl_redis
+    hostname: redis
+    image:  redis:7.0
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+
+  app:
+    build: .
+    container_name: hezzl_app
+    hostname: app
+    image: app
+    environment:
+      - PG_URL=postgres://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-pass}@${POSTGRES_DB:-postgres}:5432/${POSTGRES_DB:-postgres}
+      - RPC_PORT=${GRPC_PORT:-50051}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+    ports:
+      - 50051:50051
+    depends_on:
+      - redis
+      - postgres
+      - clickhouse
+      - broker
+      - zookeeper
+      - init-broker
+
+  integration:
+    profiles: ["integration-test"]
+    build:
+      context: .
+      dockerfile: ./integration-test/Dockerfile
+    container_name: integration
+    image: integration
+    depends_on:
+      - app
+    
